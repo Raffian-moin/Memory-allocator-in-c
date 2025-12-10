@@ -10,37 +10,50 @@ struct block_head {
     struct block_head *next;
 };
 
+struct block_footer {
+    size_t size;
+    bool free;
+};
+
 static struct block_head *base = NULL;
 
-size_t META_SIZE = sizeof(struct block_head);
+size_t BLOCK_HEAD_SIZE = sizeof(struct block_head);
+size_t BLOCK_FOOTER_SIZE = sizeof(struct block_footer);
 
 void *cus_malloc(size_t requested_size);
 void cus_free(void *ptr); 
 void *cus_realloc(void *ptr, size_t requested_size); 
 void *cus_calloc(size_t count, size_t requested_size); 
 struct block_head *get_head_block(void *ptr);
+struct block_footer *get_block_footer(void *ptr); 
 
 int main() {
     int *ptr1 = cus_malloc(100);
     ptr1[0] = 69;
     printf("ptr first vlaue: %d\n", ptr1[0]);
-    printf("ptr1 size: %zu\n", get_head_block(ptr1)->size);
+    printf("ptr1 size form header: %zu\n", get_head_block(ptr1)->size);
+    printf("ptr1 size from footer: %zu\n", get_block_footer(ptr1)->size);
     assert(get_head_block(ptr1) == (void *)base);
 
     void *ptr2 = cus_malloc(200);
-    printf("ptr2 size: %zu\n", get_head_block(ptr2)->size);
-    printf("ptr2 is free?: %d\n", get_head_block(ptr2)->free);
+    printf("ptr2 size from header: %zu\n", get_head_block(ptr2)->size);
+    printf("ptr2 size from footer: %zu\n", get_block_footer(ptr2)->size);
+    printf("ptr2 is free?(from header): %d\n", get_head_block(ptr2)->free);
+    printf("ptr2 is free?(form footer): %d\n", get_block_footer(ptr2)->free);
     printf("ptr2 address: %p\n", ptr2);
     cus_free(ptr2);
     
     void *ptr3 = cus_malloc(150);
-    printf("ptr3 is free?: %d\n", get_head_block(ptr3)->free);
+    printf("ptr3 is free?(from header): %d\n", get_head_block(ptr3)->free);
+    printf("ptr3 is free?(form footer): %d\n", get_block_footer(ptr3)->free);
     printf("ptr3 address: %p\n", ptr3);
 	cus_free(ptr3);
 
     int *ptr4 = cus_realloc(ptr1, 150);
-    printf("ptr4 is free?: %d\n", get_head_block(ptr4)->free);
-    printf("ptr4 after reallocation size: %zu\n", get_head_block(ptr4)->size);
+    printf("ptr4 is free?(from header): %d\n", get_head_block(ptr4)->free);
+    printf("ptr4 is free?(from footer): %d\n", get_block_footer(ptr4)->free);
+    printf("ptr4 after reallocation size from header: %zu\n", get_head_block(ptr4)->size);
+    printf("ptr4 after reallocation size form footer: %zu\n", get_block_footer(ptr4)->size);
     printf("ptr4 address: %p\n", ptr4);
     printf("ptr first vlaue: %d\n", ptr4[0]);
     
@@ -54,8 +67,9 @@ void *cus_malloc(size_t requested_size) {
     if (base == NULL) {
 	    void *current_heap_top = sbrk(0);
         base = current_heap_top;        
-        void *ptr = sbrk(requested_size + META_SIZE);        
-
+        void *ptr = sbrk(requested_size + BLOCK_HEAD_SIZE + BLOCK_FOOTER_SIZE);        
+        
+        
         if (ptr == ((void *)-1)) {
             return NULL;
         }
@@ -63,12 +77,22 @@ void *cus_malloc(size_t requested_size) {
         base->next = NULL;
         base->size = requested_size;
         base->free = false;
+
+        struct block_footer *footer = get_block_footer(base+1);
+        footer->free = false;
+        footer->size = requested_size;
+
         return (void *) (base + 1);
     } else {
         struct block_head *curr = base;
         // search for free space from already allocated memory
         while(curr != NULL) {
             if (curr->size >= requested_size && curr->free == true) {
+
+                struct block_footer *footer = get_block_footer(curr+1);
+                footer->free = false;
+                footer->size = requested_size;
+
                 curr->size = requested_size;
                 curr->free = false;
                 return (void *) (curr + 1);
@@ -79,8 +103,9 @@ void *cus_malloc(size_t requested_size) {
         // couldn't find space in the list, so allocated at the end of the list
 	    void *current_heap_top = sbrk(0);
         struct block_head *last_node = current_heap_top;
-        void *ptr = sbrk(requested_size + META_SIZE);        
+        void *ptr = sbrk(requested_size + BLOCK_HEAD_SIZE + BLOCK_FOOTER_SIZE);        
 
+        
         if (ptr == ((void *)-1)) {
             return NULL;
         }
@@ -95,6 +120,11 @@ void *cus_malloc(size_t requested_size) {
         last_node->size = requested_size;
         last_node->free = 0;
         last_node->next = NULL;
+
+        struct block_footer *footer = get_block_footer(last_node + 1);
+        footer->free = false;
+        footer->size = requested_size;
+
         return (void *) (last_node + 1);
     }
 } 
@@ -105,12 +135,25 @@ void cus_free(void *ptr) {
     }
 
     struct block_head *freptr = ((struct block_head *)ptr)-1;
+    struct block_footer *footer = get_block_footer(ptr);
+
     freptr->free = true;
+    footer->free = true;
 }
 
 struct block_head *get_head_block(void *ptr) { 
     return ((struct block_head *)ptr)-1;
 }
+
+struct block_footer *get_block_footer(void *ptr) { 
+    struct block_head *header = get_head_block(ptr);
+
+    char *footer = ((char *)header) + header->size + BLOCK_HEAD_SIZE;
+    struct block_footer *myfooter = ((struct block_footer *)footer);
+
+    return myfooter;
+}
+
 
 void *cus_realloc(void *ptr, size_t requested_size) {
     if (ptr == NULL || base == NULL) {
@@ -143,7 +186,7 @@ void *cus_realloc(void *ptr, size_t requested_size) {
     }
 
     if (!found) {
-        struct block_head *new_ptr = sbrk(requested_size + META_SIZE);
+        struct block_head *new_ptr = sbrk(requested_size + BLOCK_HEAD_SIZE + BLOCK_FOOTER_SIZE);
         
         if (new_ptr == ((void *)-1)) {
             return NULL;
@@ -160,6 +203,10 @@ void *cus_realloc(void *ptr, size_t requested_size) {
 
     current->free = false;
     current->size = requested_size;
+
+    struct block_footer *footer = get_block_footer(current+1);
+    footer->size = requested_size;
+    footer->free = false;
 
     cus_free(ptr);
 
